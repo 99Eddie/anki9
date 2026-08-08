@@ -195,6 +195,15 @@
   }
   .note{font-size:.82rem;color:var(--sub);line-height:1.85;}
   .note code{background:var(--g300);padding:1px 5px;border-radius:2px;font-size:.9em;}
+  .modal{position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:50;display:none;align-items:center;justify-content:center;padding:20px;}
+  .modal.on{display:flex;}
+  .modal-box{background:var(--white);border-radius:8px;padding:22px;max-width:400px;width:100%;}
+  .modal-title{font-size:1.1rem;font-weight:700;color:var(--heading);margin-bottom:8px;}
+  .modal-info{font-size:.9rem;color:var(--txt);line-height:1.7;margin-bottom:16px;}
+  .modal-box .btn{margin-bottom:4px;}
+  .modal-note{font-size:.78rem;color:var(--sub);line-height:1.6;margin:0 0 14px;}
+  .modal-cancel{width:100%;background:none;border:none;color:var(--sub);font-size:.9rem;font-weight:700;padding:12px;min-height:44px;margin-top:4px;}
+
   .toast{
     position:fixed;left:50%;bottom:90px;transform:translateX(-50%) translateY(20px);
     background:var(--heading);color:#fff;padding:11px 22px;border-radius:2px;font-size:.9rem;font-weight:700;
@@ -361,11 +370,30 @@
         ・<b>explanation</b> と <b>category</b> は省略可。<br>
         ・過去問はチャットに貼れば、この形式に変換して渡します。
       </div>
-      <div style="height:12px"></div>
-      <button id="exportBtn" class="btn ghost sm">全データを書き出す（バックアップ）</button>
+    </div>
+
+    <div class="card">
+      <div class="note" style="font-weight:600;color:var(--heading);margin-bottom:6px">バックアップと復元</div>
+      <div class="note" style="margin-bottom:12px">問題と学習記録をまとめて保存・復元できます。iPadでは書き出し時に「"ファイル"に保存」からiCloud Driveを選べます。復元も同じ場所から読み込めます。</div>
+      <button id="exportBtn" class="btn ghost sm">バックアップを書き出す</button>
+      <div style="height:10px"></div>
+      <button id="restoreBtn" class="btn ghost sm">バックアップから復元</button>
+      <input type="file" id="restoreFile" accept="application/json,.json" style="display:none">
     </div>
   </section>
 </main>
+
+<div id="restoreModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">バックアップから復元</div>
+    <div id="restoreInfo" class="modal-info"></div>
+    <button id="rOverwrite" class="btn primary">上書きで復元</button>
+    <div class="modal-note">今のデータを消して、バックアップの内容に置き換えます。</div>
+    <button id="rMerge" class="btn ghost">マージで復元</button>
+    <div class="modal-note">今のデータを残したまま、バックアップ分を追加します。</div>
+    <button id="rCancel" class="modal-cancel">キャンセル</button>
+  </div>
+</div>
 
 <nav class="tabs">
   <button data-go="home" class="active"><span class="ic">◈</span>ホーム</button>
@@ -730,11 +758,74 @@ const app = (function(){
       }
     });
   }
-  function doExport(){
-    const blob=new Blob([JSON.stringify(state,null,2)],{type:'application/json'});
+  async function doExport(){
+    const json=JSON.stringify(state,null,2);
+    const fname='quizapp-backup-'+today()+'.json';
+    // iPad/iPhoneなら共有シートを優先（「"ファイル"に保存」→ iCloud Drive を選べる）
+    try{
+      const file=new File([json],fname,{type:'application/json'});
+      if(navigator.canShare&&navigator.canShare({files:[file]})){
+        await navigator.share({files:[file],title:'バックアップ'});
+        return;
+      }
+    }catch(e){ if(e&&e.name==='AbortError')return; } // ユーザーがキャンセルしただけ
+    // フォールバック：通常ダウンロード
+    const blob=new Blob([json],{type:'application/json'});
     const url=URL.createObjectURL(blob);
-    const a=document.createElement('a');a.href=url;a.download='quizapp-backup-'+today()+'.json';a.click();
+    const a=document.createElement('a');a.href=url;a.download=fname;a.click();
     URL.revokeObjectURL(url);
+  }
+
+  function doImportBackup(file){
+    const reader=new FileReader();
+    reader.onload=()=>{
+      let data;
+      try{ data=JSON.parse(reader.result); }
+      catch(e){ toast('ファイルを読み込めませんでした'); return; }
+      if(!data||!Array.isArray(data.cards)||typeof data.sets!=='object'){
+        toast('バックアップ形式ではありません'); return;
+      }
+      const cnt=data.cards.length;
+      // 上書き or マージを選択
+      showRestoreChoice(data,cnt);
+    };
+    reader.onerror=()=>toast('ファイルを読み込めませんでした');
+    reader.readAsText(file);
+  }
+
+  function showRestoreChoice(data,cnt){
+    const ov=document.getElementById('restoreModal');
+    document.getElementById('restoreInfo').textContent='バックアップに '+cnt+' 問あります。どのように復元しますか？';
+    ov.classList.add('on');
+    document.getElementById('rOverwrite').onclick=()=>{
+      state=data;
+      if(!state.cards)state.cards=[];if(!state.sets)state.sets={};if(!state.log)state.log=[];
+      save();ov.classList.remove('on');renderSets();renderHome();
+      toast('上書きで復元しました');
+    };
+    document.getElementById('rMerge').onclick=()=>{
+      // セットとカードを追加。IDが被る場合は新IDを振る
+      const idMap={};
+      Object.entries(data.sets||{}).forEach(([sid,s])=>{
+        let nid=sid;
+        if(state.sets[nid])nid='s'+Math.random().toString(36).slice(2,9);
+        idMap[sid]=nid;state.sets[nid]=s;
+      });
+      (data.cards||[]).forEach(c=>{
+        const nc=Object.assign({},c);
+        nc.set=idMap[c.set]||c.set;
+        if(state.cards.some(x=>x.id===nc.id))nc.id='c'+Math.random().toString(36).slice(2,10);
+        state.cards.push(nc);
+      });
+      // ログはマージ（同日は合算）
+      (data.log||[]).forEach(e=>{
+        const ex=state.log.find(x=>x.date===e.date);
+        if(ex){ex.seen+=e.seen;ex.ok+=e.ok;}else state.log.push(Object.assign({},e));
+      });
+      save();ov.classList.remove('on');renderSets();renderHome();
+      toast('マージで復元しました');
+    };
+    document.getElementById('rCancel').onclick=()=>ov.classList.remove('on');
   }
 
   function esc(s){return String(s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));}
@@ -758,6 +849,9 @@ const app = (function(){
     document.getElementById('startBtn').onclick=startSession;
     document.getElementById('importBtn').onclick=doImport;
     document.getElementById('exportBtn').onclick=doExport;
+    const rf=document.getElementById('restoreFile');
+    document.getElementById('restoreBtn').onclick=()=>rf.click();
+    rf.onchange=()=>{ if(rf.files&&rf.files[0]){doImportBackup(rf.files[0]);rf.value='';} };
     renderHome();
     if('serviceWorker'in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
   }
