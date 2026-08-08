@@ -406,15 +406,77 @@
 <script>
 const app = (function(){
   const DB='quizapp.v1';
+  const IDB_NAME='quizapp';        // IndexedDBのデータベース名
+  const IDB_STORE='state';         // オブジェクトストア名
+  const IDB_KEY='main';            // stateを入れる固定キー
   let state={cards:[],sets:{},log:[]}; // log: {date, correct}
   let session=null;
+  let _idb=null;                   // IndexedDB接続のキャッシュ
+  let _saveTimer=null;             // save連打をまとめる
 
-  /* ---------- storage ---------- */
-  function load(){
-    try{const r=localStorage.getItem(DB);if(r)state=JSON.parse(r);}catch(e){}
+  /* ---------- storage (IndexedDB) ---------- */
+  function openIDB(){
+    return new Promise((resolve,reject)=>{
+      if(_idb)return resolve(_idb);
+      let req;
+      try{ req=indexedDB.open(IDB_NAME,1); }
+      catch(e){ return reject(e); }
+      req.onupgradeneeded=()=>{
+        const db=req.result;
+        if(!db.objectStoreNames.contains(IDB_STORE))db.createObjectStore(IDB_STORE);
+      };
+      req.onsuccess=()=>{ _idb=req.result; resolve(_idb); };
+      req.onerror=()=>reject(req.error);
+    });
+  }
+
+  function idbGet(){
+    return new Promise((resolve,reject)=>{
+      openIDB().then(db=>{
+        const tx=db.transaction(IDB_STORE,'readonly');
+        const rq=tx.objectStore(IDB_STORE).get(IDB_KEY);
+        rq.onsuccess=()=>resolve(rq.result||null);
+        rq.onerror=()=>reject(rq.error);
+      }).catch(reject);
+    });
+  }
+
+  function idbPut(obj){
+    return new Promise((resolve,reject)=>{
+      openIDB().then(db=>{
+        const tx=db.transaction(IDB_STORE,'readwrite');
+        tx.objectStore(IDB_STORE).put(obj,IDB_KEY);
+        tx.oncomplete=()=>resolve();
+        tx.onerror=()=>reject(tx.error);
+      }).catch(reject);
+    });
+  }
+
+  // 起動時：IndexedDB優先。無ければ旧localStorageから移行。
+  async function load(){
+    let loaded=null;
+    try{ loaded=await idbGet(); }catch(e){}
+    if(!loaded){
+      // 旧localStorageからの移行
+      try{const r=localStorage.getItem(DB);if(r)loaded=JSON.parse(r);}catch(e){}
+      if(loaded){
+        try{ await idbPut(loaded); }catch(e){}   // IndexedDBへ移行保存
+      }
+    }
+    if(loaded)state=loaded;
     if(!state.cards)state.cards=[];if(!state.sets)state.sets={};if(!state.log)state.log=[];
   }
-  function save(){localStorage.setItem(DB,JSON.stringify(state));}
+
+  // save()は同期的に呼ばれるので、メモリは即時反映しつつ、
+  // IndexedDBへの書き込みは短いデバウンスで非同期実行する。
+  function save(){
+    if(_saveTimer)clearTimeout(_saveTimer);
+    _saveTimer=setTimeout(()=>{
+      idbPut(state).catch(e=>{ /* 失敗時はコンソールのみ */ console.warn('IndexedDB保存失敗',e); });
+    },120);
+    // localStorageにも保険で書く（5MB超なら失敗するが握りつぶす）
+    try{ localStorage.setItem(DB,JSON.stringify(state)); }catch(e){}
+  }
 
   /* ---------- helpers ---------- */
   const today=()=>{const d=new Date();return d.getFullYear()+'-'+String(d.getMonth()+1).padStart(2,'0')+'-'+String(d.getDate()).padStart(2,'0');};
@@ -840,8 +902,8 @@ const app = (function(){
   }
 
   /* ---------- init ---------- */
-  function init(){
-    load();
+  async function init(){
+    await load();
     document.querySelectorAll('nav.tabs button').forEach(b=>b.onclick=()=>go(b.dataset.go));
     document.querySelectorAll('#modeSeg button').forEach(b=>b.onclick=()=>{
       document.querySelectorAll('#modeSeg button').forEach(x=>x.classList.remove('on'));b.classList.add('on');
