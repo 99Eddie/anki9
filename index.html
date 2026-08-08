@@ -134,7 +134,7 @@
   .progbar{height:4px;background:var(--g300);border-radius:0;overflow:hidden;margin-bottom:20px;}
   .progbar>i{display:block;height:100%;background:var(--red);transition:width .25s var(--ease);}
   .qtext{font-size:1.15rem;font-weight:600;line-height:1.85;color:var(--heading);margin-bottom:6px;}
-  .qimg{display:block;width:100%;max-width:100%;border:1px solid var(--g300);border-radius:4px;margin:12px 0 14px;background:#000;cursor:zoom-in;}
+  .qimg{display:block;width:100%;max-width:100%;border:1px solid var(--g300);border-radius:4px;margin:12px 0 14px;background:#000;}
   .lightbox{position:fixed;inset:0;background:rgba(0,0,0,.92);z-index:60;display:none;align-items:center;justify-content:center;padding:16px;}
   .lightbox.on{display:flex;}
   .lightbox img{max-width:100%;max-height:100%;object-fit:contain;}
@@ -372,7 +372,6 @@
 </nav>
 
 <div id="toast" class="toast"></div>
-<div id="lightbox" class="lightbox"><button class="close" aria-label="閉じる">✕</button><img id="lbImg" src="" alt="拡大画像"></div>
 
 <script>
 const app = (function(){
@@ -507,7 +506,7 @@ const app = (function(){
 
     const letters='ABCDEFGH';
     let html='<div class="qtext">'+esc(c.question)+'</div>';
-    if(c.image)html+='<img class="qimg" src="'+c.image+'" alt="問題画像" data-full="'+c.image+'">';
+    if(c.image)html+='<img class="qimg" src="'+c.image+'" alt="問題画像">';
     if(multi)html+='<div class="qhint">◆ 正解を '+c.answer.length+' つ選択</div>';
     html+='<div id="choices">';
     c.choices.forEach((ch,i)=>{
@@ -516,9 +515,6 @@ const app = (function(){
     html+='</div>';
     html+='<div id="qaction" style="margin-top:6px"></div>';
     document.getElementById('qBody').innerHTML=html;
-
-    const qimg=document.querySelector('#qBody .qimg');
-    if(qimg)qimg.onclick=()=>openLightbox(qimg.dataset.full);
 
     const sel=new Set();
     const choiceEls=[...document.querySelectorAll('#choices .choice')];
@@ -760,8 +756,6 @@ const app = (function(){
     document.getElementById('startBtn').onclick=startSession;
     document.getElementById('importBtn').onclick=doImport;
     document.getElementById('exportBtn').onclick=doExport;
-    const lb=document.getElementById('lightbox');
-    lb.onclick=closeLightbox;
     renderHome();
     if('serviceWorker'in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
   }
