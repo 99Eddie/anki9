@@ -395,6 +395,16 @@
   </div>
 </div>
 
+<div id="backupModal" class="modal">
+  <div class="modal-box">
+    <div class="modal-title">バックアップのおすすめ</div>
+    <div id="backupInfo" class="modal-info"></div>
+    <button id="bkNow" class="btn primary">今すぐバックアップ</button>
+    <div class="modal-note">共有シートから「"ファイル"に保存」→ iCloud Drive を選べます。</div>
+    <button id="bkLater" class="modal-cancel">後で</button>
+  </div>
+</div>
+
 <nav class="tabs">
   <button data-go="home" class="active"><span class="ic">◈</span>ホーム</button>
   <button data-go="stats"><span class="ic">◔</span>記録</button>
@@ -403,6 +413,7 @@
 
 <div id="toast" class="toast"></div>
 
+<script src="sample-data.js"></script>
 <script>
 const app = (function(){
   const DB='quizapp.v1';
@@ -465,6 +476,36 @@ const app = (function(){
     }
     if(loaded)state=loaded;
     if(!state.cards)state.cards=[];if(!state.sets)state.sets={};if(!state.log)state.log=[];
+    ensureSampleQuestions();
+  }
+
+  // テスト問題（サンプル固定）を必ず存在させる。消されていたら復活。
+  function ensureSampleQuestions(){
+    if(!window.SAMPLE_QUESTIONS||!window.SAMPLE_SET_ID)return;
+    const SID=window.SAMPLE_SET_ID;
+    let changed=false;
+    // セットが無ければ作る
+    if(!state.sets[SID]){
+      state.sets[SID]={name:window.SAMPLE_SET_NAME||'テスト問題',added:today(),sample:true};
+      changed=true;
+    }
+    // 各サンプル問題を、_sampleIdで存在チェックし、無ければ追加
+    window.SAMPLE_QUESTIONS.forEach(q=>{
+      const exists=state.cards.some(c=>c._sampleId===q._sampleId);
+      if(!exists){
+        state.cards.push({
+          id:'c'+Math.random().toString(36).slice(2,10),
+          _sampleId:q._sampleId,
+          set:SID,
+          question:q.question,choices:q.choices,answer:q.answer,
+          explanation:q.explanation||'',category:q.category||window.SAMPLE_SET_NAME||'テスト問題',
+          image:q.image||'',
+          ef:2.5,reps:0,interval:0,due:now(),seen:0,ok:0,phase:'learn'
+        });
+        changed=true;
+      }
+    });
+    if(changed)save();
   }
 
   // save()は同期的に呼ばれるので、メモリは即時反映しつつ、
@@ -820,6 +861,10 @@ const app = (function(){
       }
     });
   }
+  function markBackup(){
+    state.lastBackup=Date.now();
+    save();
+  }
   async function doExport(){
     const json=JSON.stringify(state,null,2);
     const fname='quizapp-backup-'+today()+'.json';
@@ -828,6 +873,7 @@ const app = (function(){
       const file=new File([json],fname,{type:'application/json'});
       if(navigator.canShare&&navigator.canShare({files:[file]})){
         await navigator.share({files:[file],title:'バックアップ'});
+        markBackup();
         return;
       }
     }catch(e){ if(e&&e.name==='AbortError')return; } // ユーザーがキャンセルしただけ
@@ -836,6 +882,33 @@ const app = (function(){
     const url=URL.createObjectURL(blob);
     const a=document.createElement('a');a.href=url;a.download=fname;a.click();
     URL.revokeObjectURL(url);
+    markBackup();
+  }
+
+  // 5日以上バックアップしていなければ起動時に1回促す
+  function checkBackupReminder(){
+    if(!state.cards||state.cards.length===0)return;      // 空なら促さない
+    const DAYS=5, MS=DAYS*24*60*60*1000;
+    const last=state.lastBackup||0;
+    // 一度もバックアップしていない場合：問題が10問以上たまってから促す
+    if(!last){
+      if(state.cards.length>=10)showBackupReminder(null);
+      return;
+    }
+    if(Date.now()-last>=MS)showBackupReminder(last);
+  }
+  function showBackupReminder(last){
+    const ov=document.getElementById('backupModal');
+    const info=document.getElementById('backupInfo');
+    if(last){
+      const days=Math.floor((Date.now()-last)/(24*60*60*1000));
+      info.textContent='最後のバックアップから'+days+'日が経過しています。データを守るためにバックアップをおすすめします。';
+    }else{
+      info.textContent='まだ一度もバックアップしていません。万一に備えてバックアップをおすすめします。';
+    }
+    ov.classList.add('on');
+    document.getElementById('bkNow').onclick=()=>{ ov.classList.remove('on'); doExport(); };
+    document.getElementById('bkLater').onclick=()=>{ ov.classList.remove('on'); };
   }
 
   function doImportBackup(file){
@@ -862,6 +935,7 @@ const app = (function(){
     document.getElementById('rOverwrite').onclick=()=>{
       state=data;
       if(!state.cards)state.cards=[];if(!state.sets)state.sets={};if(!state.log)state.log=[];
+      state.lastBackup=Date.now(); // 復元直後はデータが安全な状態
       save();ov.classList.remove('on');renderSets();renderHome();
       toast('上書きで復元しました');
     };
@@ -915,6 +989,7 @@ const app = (function(){
     document.getElementById('restoreBtn').onclick=()=>rf.click();
     rf.onchange=()=>{ if(rf.files&&rf.files[0]){doImportBackup(rf.files[0]);rf.value='';} };
     renderHome();
+    setTimeout(checkBackupReminder,600); // 起動直後に1回チェック
     if('serviceWorker'in navigator){navigator.serviceWorker.register('sw.js').catch(()=>{});}
   }
   init();
